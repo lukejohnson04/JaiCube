@@ -82,16 +82,15 @@ block_texture : Texture;
 
 noise : [CHUNK_SIZE * 16][CHUNK_SIZE * 16]float32;
 
-chunk_vertices : [..]Vertex;
-
 
 Chunk :: struct {
     data : [CHUNK_SIZE][CHUNK_HEIGHT][CHUNK_SIZE] BLOCK_TYPE;
     world_x, world_z : int;
-    solid_vbo: GLuint;
-    transparent_vbo: GLuint;
-}
 
+    solid_vao: GLuint;
+    solid_vbo: GLuint;
+    vertices: [..]Vertex;
+}
 
 
 WORLD_SIZE :: 16;
@@ -101,19 +100,22 @@ CHUNK_HEIGHT :: 64;
 
 // If a chunk is within the render distance amount of chunks, it will be loaded
 // If a chunk leaves the render distance+1 amount of chunks, it will be unloaded
-chunks : [WORLD_SIZE][WORLD_SIZE]Chunk;
+// chunks : [WORLD_SIZE][WORLD_SIZE]Chunk;
+loaded_chunks : [..]Chunk;
+
 
 RENDER_DISTANCE :: 8;
 
-load_chunk :: (chunk: *Chunk) {
+
+generate_chunk :: (chunk: *Chunk) {
     for x: 0..CHUNK_SIZE-1 {
         // reorder data so y level changes the most slowly will increase the speed of generation
         for z: 0..CHUNK_SIZE-1 {
-            world_x := chunk.world_x * 16 + x;
-            world_z := chunk.world_z * 16 + z;
-            noise := perlin2d(xx world_x, xx world_z, 0.05, 3);
+            world_x : float64 = xx (chunk.world_x * 16 + x);
+            world_z : float64 = xx (chunk.world_z * 16 + z);
+            noise := perlin2d(world_x, world_z, 0.05, 3);
             ylevel := cast(int)(noise * CHUNK_HEIGHT);
-            waterlevel := 30;
+            waterlevel :: 30;
 
             for y: 0..CHUNK_HEIGHT-1 {
                 if y > ylevel {
@@ -128,27 +130,40 @@ load_chunk :: (chunk: *Chunk) {
     }
 }
 
-load_world :: () {
-    for z: 0..15 {
-        for x: 0..15 {
-            chunks[x][z].world_x = x;
-            chunks[x][z].world_z = z;
-            load_chunk(*chunks[x][z]);
+
+get_loaded_chunks :: () -> [..]v2i {
+    chunk_coordinates: [..]v2i;
+    chunk_coordinates.allocator = temp;
+    for x: -RENDER_DISTANCE..RENDER_DISTANCE {
+        xpos := cast(int)(camera_position.x / cast(float) CHUNK_SIZE) + x;
+        if xpos < 0 || xpos >= WORLD_SIZE {
+            continue;
+        }
+        for z: -RENDER_DISTANCE..RENDER_DISTANCE {
+            zpos := cast(int)(camera_position.z / cast(float) CHUNK_SIZE) + z;
+            if zpos < 0 || zpos >= WORLD_SIZE {
+                continue;
+            }
+            array_add(*chunk_coordinates, v2i.{xpos, zpos});
         }
     }
+    return chunk_coordinates;
 }
 
-append_chunk_vertices :: (using chunk: *Chunk) {
+generate_chunk_vertices :: (using chunk: *Chunk) {
+    chunk.vertices.count = 0;
+
     // Returns true if the face should be removed
     check_neighbor :: (tile: BLOCK_TYPE, neighbor: BLOCK_TYPE) -> bool {
         if neighbor == .AIR || (neighbor == .WATER && tile != .WATER) {
             return false;
         }
         return true;
-        // return (neighbor != .WATER || (neighbor == .WATER && tile == .WATER));
     }
 
     // Create vertices for the entire world
+    world_coord_x := world_x * 16;
+    world_coord_z := world_z * 16;
     for x: 0..CHUNK_SIZE-1 {
         for y: 0..CHUNK_HEIGHT-1 {
             for z: 0..CHUNK_SIZE-1 {
@@ -157,35 +172,34 @@ append_chunk_vertices :: (using chunk: *Chunk) {
 
                 // check if it is visible
                 faces: [6]bool;
-                for 0..5 faces[it] = true;
 
                 // back face
                 if z > 0 && check_neighbor(block, data[x][y][z-1]) {
-                    faces[0] = false;
+                    faces[0] = true;
                 }
                 // front face
                 if z < CHUNK_SIZE-1 && check_neighbor(block, data[x][y][z+1]) {
-                    faces[1] = false;
+                    faces[1] = true;
                 }
                 // left face
                 if x > 0 && check_neighbor(block, data[x-1][y][z]) {
-                    faces[2] = false;
+                    faces[2] = true;
                 }
                 // right face
                 if x < CHUNK_SIZE-1 && check_neighbor(block, data[x+1][y][z]) {
-                    faces[3] = false;
+                    faces[3] = true;
                 }
                 // top face
                 if y > 0 && check_neighbor(block, data[x][y-1][z]) {
-                    faces[4] = false;
+                    faces[4] = true;
                 }
                 // bottom face
                 if y < CHUNK_HEIGHT-1 && check_neighbor(block, data[x][y+1][z]) {
-                    faces[5] = false;
+                    faces[5] = true;
                 }
 
                 for face: 0..5 {
-                    if faces[face] == false continue;
+                    if faces[face] == true continue;
 
                     u0, u1, v0, v1 : float;
                     if block == .DIRT {
@@ -209,48 +223,42 @@ append_chunk_vertices :: (using chunk: *Chunk) {
 
                     for pos: 0..5 {
                         vertex := VERTICES[face * 6 + pos];
-                        vertex.x += chunk.world_x * 16 + x;
+                        vertex.x += world_coord_x + x;
                         vertex.y += y;
-                        vertex.z += chunk.world_z * 16 + z;
+                        vertex.z += world_coord_z + z;
 
                         vertex.u = ifx VERTICES[face * 6 + pos].u == 1 then u0 else u1;
                         vertex.v = ifx VERTICES[face * 6 + pos].v == 1 then v0 else v1;
                         
                         // uv value
-                        array_add(*chunk_vertices, vertex);
+                        array_add(*vertices, vertex);
                     }
                 }
             }
         }
     }
+
+    if glIsBuffer(chunk.solid_vbo) == GL_FALSE {
+        glGenBuffers(1, *chunk.solid_vbo);
+    } if glIsVertexArray(chunk.solid_vao) == GL_FALSE {
+        glGenVertexArrays(1, *chunk.solid_vao);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, chunk.solid_vbo);
+    glBufferData(GL_ARRAY_BUFFER, size_of(Vertex) * chunk.vertices.count, chunk.vertices.data, GL_STATIC_DRAW);
+
+    glBindVertexArray(chunk.solid_vao);
+    // This is lined up weird... the VBO/VAO is bound at the end of prepare mesh and then adjusted here
+    // position attribute
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, size_of(float32) * 5, null);
+    glEnableVertexAttribArray(0);
+    // texture coord attribute
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, size_of(float32) * 5, cast(*void)(size_of(float32) * 3));
+    glEnableVertexAttribArray(1);
 }
 
-get_loaded_chunks :: () -> [..]*Chunk {
-    loaded: [..]*Chunk;
-    for x: -RENDER_DISTANCE..RENDER_DISTANCE {
-        xpos := cast(int)(camera_position.x / cast(float) CHUNK_SIZE) + x;
-        if xpos < 0 || xpos >= WORLD_SIZE {
-            continue;
-        }
-        for z: -RENDER_DISTANCE..RENDER_DISTANCE {
-            zpos := cast(int)(camera_position.z / cast(float) CHUNK_SIZE) + z;
-            if zpos < 0 || zpos >= WORLD_SIZE {
-                continue;
-            }
-            array_add(*loaded, *chunks[xpos][zpos]);
-        }
-    }
-    return loaded;
-}
 
 on_startup :: () {
-
     // perlin
-    for y: 0..CHUNK_SIZE-1 {
-        for x: 0..CHUNK_SIZE-1 {
-            noise[y][x] = perlin2d(xx x, xx y, 0.05, 3);
-        }
-    }
     glGenVertexArrays(1, *intermediate_vao);
     glGenBuffers(1, *intermediate_vbo);
     glBindVertexArray(intermediate_vao);
@@ -264,24 +272,15 @@ on_startup :: () {
     glUseProgram(cube_shader);
     glUniform1i(glGetUniformLocation(cube_shader, "texture1"), 0);
 
-
-    load_world();
-    loaded := get_loaded_chunks();
-    chunk_vertices.count = 0;
-    for loaded {
-        append_chunk_vertices(it);
+    chunk_coords := get_loaded_chunks();
+    for chunk_coords {
+        chunk: Chunk;
+        chunk.world_x = it.x;
+        chunk.world_z = it.y;
+        generate_chunk(*chunk);
+        generate_chunk_vertices(*chunk);
+        array_add(*loaded_chunks, chunk);
     }
-    glBindBuffer(GL_ARRAY_BUFFER, intermediate_vbo);
-    glBufferData(GL_ARRAY_BUFFER, size_of(Vertex) * chunk_vertices.count, chunk_vertices.data, GL_STATIC_DRAW);
-
-    // This is lined up weird... the VBO/VAO is bound at the end of prepare mesh and then adjusted here
-    // position attribute
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, size_of(float32) * 5, null);
-    glEnableVertexAttribArray(0);
-    // texture coord attribute
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, size_of(float32) * 5, cast(*void)(size_of(float32) * 3));
-    glEnableVertexAttribArray(1);
-
 
     SDL_SetRelativeMouseMode(SDL_TRUE);
 }
@@ -344,6 +343,42 @@ update_and_render :: (running : *bool) {
         player_velocity = .{0,0,0};
     }
 
+    // Goal of this code:
+    // If a chunk is within RENDER DISTANCE chunks, we want to be sure it is loaded
+    // If a chunk is outside of RENDER DISTANCE + 1 chunks, we want to be sure it is unloaded
+    chunk_x := cast(int)floor((camera_position.x) / CHUNK_SIZE);
+    chunk_z := cast(int)floor((camera_position.z) / CHUNK_SIZE);
+
+    added_or_removed := false;
+    // Unload chunks
+    for loaded_chunks {
+        // generic distance
+        distance_x := abs(chunk_x - it.world_x);
+        distance_z := abs(chunk_z - it.world_z);
+        distance := max(distance_x, distance_z);
+        if distance > RENDER_DISTANCE + 1 {
+            remove it;
+        }
+    }
+
+    // Add chunks
+    for x: (chunk_x-RENDER_DISTANCE)..(chunk_x+RENDER_DISTANCE) {
+        for z: (chunk_z-RENDER_DISTANCE)..(chunk_z+RENDER_DISTANCE) {
+            for loaded_chunks {
+                if it.world_x == x && it.world_z == z {
+                    continue z;
+                }
+            }
+
+            chunk: Chunk;
+            chunk.world_x = x;
+            chunk.world_z = z;
+            generate_chunk(*chunk);
+            generate_chunk_vertices(*chunk);
+            array_add(*loaded_chunks, chunk);
+        }
+    }    
+
     if noclip == false {
         // velocity
         player_velocity.y -= 0.85 * FRAME_TIME;
@@ -358,17 +393,26 @@ update_and_render :: (running : *bool) {
         chunk_z := cast(int)floor(camera_position.z - (player_chunk_z * CHUNK_SIZE));
         chunk_y := cast(int)ceil(player_bottom);
 
+
         if chunk_x >= 0 && chunk_x < CHUNK_SIZE &&
             chunk_y >= 0 && chunk_y < CHUNK_HEIGHT &&
             chunk_z >= 0 && chunk_z < CHUNK_SIZE {
-                
-            if chunks[player_chunk_x][player_chunk_z].data[chunk_x][chunk_y][chunk_z] != .AIR {
-                player_bottom = xx chunk_y;
-                camera_position.y = player_bottom + PLAYER_HEIGHT - 0.25;
-                player_velocity.y = 0;
+
+            chunk: *Chunk = null;
+            for loaded_chunks {
+                if it.world_x == player_chunk_x && it.world_z == player_chunk_z {
+                    chunk = *it;
+                    break;
+                }
+            }
+            if chunk != null {
+                if chunk.data[chunk_x][chunk_y][chunk_z] != .AIR {
+                    player_bottom = xx chunk_y;
+                    camera_position.y = player_bottom + PLAYER_HEIGHT - 0.25;
+                    player_velocity.y = 0;
+                }
             }
         }
-
 
         camera_position += player_velocity;
     }
@@ -385,111 +429,127 @@ update_and_render :: (running : *bool) {
     camera_direction.z = sin(radians(yaw)) * cos(radians(pitch));
     camera_front = normalize(camera_direction);
 
-    /*if false {
-        selected_block : Vector3;
-        block_highlighted := false;
+    selected_block : Vector3;
+    block_highlighted := false;
 
-        // remove block
-        ray := camera_position;
-        ray_direction := normalize(camera_direction);
-        //ray_direction = ray_direction * 0.1;
+    // remove block
+    ray := camera_position;
+    ray_direction := normalize(camera_direction);
+    //ray_direction = ray_direction * 0.1;
 
-        bx : int = xx floor(ray.x);
-        by : int = xx floor(ray.y);
-        bz : int = xx floor(ray.z);
+    bx : int = xx floor(ray.x);
+    by : int = xx floor(ray.y);
+    bz : int = xx floor(ray.z);
 
-        stepX := ifx ray_direction.x >= 0 then 1 else -1;
-        stepY := ifx ray_direction.y >= 0 then 1 else -1;
-        stepZ := ifx ray_direction.z >= 0 then 1 else -1;
+    stepX := ifx ray_direction.x >= 0 then 1 else -1;
+    stepY := ifx ray_direction.y >= 0 then 1 else -1;
+    stepZ := ifx ray_direction.z >= 0 then 1 else -1;
 
-        tDeltaX : float32 = ifx (ray_direction.x == 0) then 999999 else abs(1 / ray_direction.x);
-        tDeltaY : float32 = ifx (ray_direction.y == 0) then 999999 else abs(1 / ray_direction.y);
-        tDeltaZ : float32 = ifx (ray_direction.z == 0) then 999999 else abs(1 / ray_direction.z);
+    tDeltaX : float32 = ifx (ray_direction.x == 0) then 999999 else abs(1 / ray_direction.x);
+    tDeltaY : float32 = ifx (ray_direction.y == 0) then 999999 else abs(1 / ray_direction.y);
+    tDeltaZ : float32 = ifx (ray_direction.z == 0) then 999999 else abs(1 / ray_direction.z);
 
-        nextBoundaryX := ifx (stepX > 0) then (bx + 1) else bx;   // If direction is +X, boundary is at the next integer block edge
-        nextBoundaryY := ifx (stepY > 0) then (by + 1) else by;
-        nextBoundaryZ := ifx (stepZ > 0) then (bz + 1) else bz;
+    nextBoundaryX := ifx (stepX > 0) then (bx + 1) else bx;   // If direction is +X, boundary is at the next integer block edge
+    nextBoundaryY := ifx (stepY > 0) then (by + 1) else by;
+    nextBoundaryZ := ifx (stepZ > 0) then (bz + 1) else bz;
 
-        tMaxX := ifx (ray_direction.x == 0) then 999999 else ( (nextBoundaryX - ray.x) / ray_direction.x );
-        tMaxY := ifx (ray_direction.y == 0) then 999999 else ( (nextBoundaryY - ray.y) / ray_direction.y );
-        tMaxZ := ifx (ray_direction.z == 0) then 999999 else ( (nextBoundaryZ - ray.z) / ray_direction.z );
+    tMaxX := ifx (ray_direction.x == 0) then 999999 else ( (nextBoundaryX - ray.x) / ray_direction.x );
+    tMaxY := ifx (ray_direction.y == 0) then 999999 else ( (nextBoundaryY - ray.y) / ray_direction.y );
+    tMaxZ := ifx (ray_direction.z == 0) then 999999 else ( (nextBoundaryZ - ray.z) / ray_direction.z );
 
-        maxDist := 10;
+    maxDist := 10;
 
-        FACE_HIT :: enum {
-            BACK;
-            FRONT;
-            LEFT;
-            RIGHT;
-            TOP;
-            BOTTOM;
-            NONE;
+    FACE_HIT :: enum {
+        BACK;
+        FRONT;
+        LEFT;
+        RIGHT;
+        TOP;
+        BOTTOM;
+        NONE;
+    }
+    faceHit := FACE_HIT.NONE;
+
+    selected_chunk : *Chunk = null;
+
+    while true {
+        traveled := min(tMaxX, tMaxY, tMaxZ); // how far along ray we are
+        if traveled > xx maxDist {
+            break;
         }
-        faceHit := FACE_HIT.NONE;
-
-        while true {
-            traveled := min(tMaxX, tMaxY, tMaxZ); // how far along ray we are
-            if traveled > xx maxDist {
-                break;
+        
+        if by < CHUNK_HEIGHT {
+            // Chunk of the block
+            chunk_x := cast(int)floor(bx / 16.0);
+            chunk_z := cast(int)floor(bz / 16.0);
+            chunk: *Chunk = null;
+            for loaded_chunks {
+                if it.world_x == chunk_x && it.world_z == chunk_z {
+                    chunk = *it;
+                    break;
+                }
             }
 
-            if bx < 0 || bx >= CHUNK_SIZE || by < 0 || by >= CHUNK_SIZE || bz < 0 || bz >= CHUNK_SIZE {
-                // print ("no col, out of bounds\n");
-                // break;
-            } else if chunk[bx][by][bz] != .AIR {
+            if chunk == null continue;
+
+            block_pos_x := bx - (chunk_x*CHUNK_SIZE);
+            block_pos_z := bz - (chunk_z*CHUNK_SIZE);
+
+            if chunk.data[block_pos_x][by][block_pos_z] != .AIR {
                 // Found a block
-                selected_block = .{xx bx, xx by, xx bz};
+                selected_chunk = chunk;
+                selected_block = .{xx block_pos_x, xx by, xx block_pos_z};
                 block_highlighted = true;
-                // return ( (bx, by, bz), faceHit )
                 break;
-            }
-
-            if tMaxX < tMaxY && tMaxX < tMaxZ {
-                bx += stepX;
-                tMaxX += tDeltaX;
-                faceHit = ifx stepX > 0 then .LEFT else .RIGHT;
-            } else if tMaxY < tMaxZ {
-                by += stepY;
-                tMaxY += tDeltaY;
-                faceHit = ifx (stepY > 0) then .BOTTOM else .TOP;
-            } else {
-                bz += stepZ;
-                tMaxZ += tDeltaZ;
-                faceHit = ifx (stepZ > 0) then .BACK else .FRONT;
             }
         }
 
-        updated_mesh := false;
+        if tMaxX < tMaxY && tMaxX < tMaxZ {
+            bx += stepX;
+            tMaxX += tDeltaX;
+            faceHit = ifx stepX > 0 then .LEFT else .RIGHT;
+        } else if tMaxY < tMaxZ {
+            by += stepY;
+            tMaxY += tDeltaY;
+            faceHit = ifx (stepY > 0) then .BOTTOM else .TOP;
+        } else {
+            bz += stepZ;
+            tMaxZ += tDeltaZ;
+            faceHit = ifx (stepZ > 0) then .BACK else .FRONT;
+        }
+    }
 
-        if input.mouse_just_pressed {
-            chunk[xx selected_block.x][xx selected_block.y][xx selected_block.z] = .AIR;
+    updated_mesh := false;
+
+    if input.mouse_just_pressed && block_highlighted {
+        // Find current chunk
+        selected_chunk.data[xx selected_block.x][xx selected_block.y][xx selected_block.z] = .AIR;
+        updated_mesh = true;
+    }
+
+    if input.rmouse_just_pressed && block_highlighted {
+        new_block := selected_block;
+        if faceHit == {
+            case .LEFT; new_block.x -= 1;
+            case .RIGHT; new_block.x += 1;
+            case .BACK; new_block.z -= 1;
+            case .FRONT; new_block.z += 1;
+            case .TOP; new_block.y += 1;
+            case .BOTTOM; new_block.y -= 1;
+        }
+        if new_block.x < 0 || new_block.x >= CHUNK_SIZE ||
+            new_block.y < 0 || new_block.y >= CHUNK_HEIGHT ||
+            new_block.z < 0 || new_block.z >= CHUNK_SIZE {
+
+        } else {
+            selected_chunk.data[xx new_block.x][xx new_block.y][xx new_block.z] = .DIRT;
             updated_mesh = true;
         }
+    }
 
-        if input.rmouse_just_pressed {
-            new_block := selected_block;
-            if faceHit == {
-                case .LEFT; new_block.x -= 1;
-                case .RIGHT; new_block.x += 1;
-                case .BACK; new_block.z -= 1;
-                case .FRONT; new_block.z += 1;
-                case .TOP; new_block.y += 1;
-                case .BOTTOM; new_block.y -= 1;
-            }
-            if new_block.x < 0 || new_block.x >= CHUNK_SIZE ||
-                new_block.y < 0 || new_block.y >= CHUNK_SIZE ||
-                new_block.z < 0 || new_block.z >= CHUNK_SIZE {
-
-            } else {
-                chunk[xx new_block.x][xx new_block.y][xx new_block.z] = .DIRT;
-                updated_mesh = true;
-            }
-        }
-
-        if updated_mesh {
-            prepare_mesh();
-        }
-    }*/
+    if updated_mesh {
+        generate_chunk_vertices(selected_chunk);
+    }
 
     // Render begin
     glClearColor(0.35, 0.5, 0.9, 1.0);
@@ -497,7 +557,6 @@ update_and_render :: (running : *bool) {
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, block_texture.gl_handle);
-
     glUseProgram(cube_shader);
 
     view := Matrix4_Identity;
@@ -508,7 +567,7 @@ update_and_render :: (running : *bool) {
     camZ := cos(timer) * radius;
     view = make_look_at_matrix(camera_position, camera_position + camera_front, camera_up, false);
 
-    projection = make_projection_matrix(45 * (PI/180), cast(float32)(WINDOW_WIDTH) / cast(float32)(WINDOW_HEIGHT), 0.1, 200);
+    projection = make_projection_matrix(45 * (PI/180), cast(float32)(WINDOW_WIDTH) / cast(float32)(WINDOW_HEIGHT), 0.1, 400);
     model := Matrix4_Identity;
 
     model_loc := glGetUniformLocation(cube_shader, "model");
@@ -518,9 +577,13 @@ update_and_render :: (running : *bool) {
     glUniformMatrix4fv(glGetUniformLocation(cube_shader, "projection"), 1, GL_TRUE, xx *projection);
 
     // Draw blocks
-    glBindVertexArray(intermediate_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, intermediate_vbo);
-    glDrawArrays(GL_TRIANGLES, 0, xx chunk_vertices.count);
+    for loaded_chunks {
+        glBindVertexArray(it.solid_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, it.solid_vbo);
+        glDrawArrays(GL_TRIANGLES, 0, xx it.vertices.count);
+    }
+    // glBindBuffer(GL_ARRAY_BUFFER, intermediate_vbo);
+    // glDrawArrays(GL_TRIANGLES, 0, xx chunk_vertices.count);
 
     SDL_GL_SwapWindow(window);
     // sleep_till_next_update();

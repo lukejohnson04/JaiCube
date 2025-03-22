@@ -1,7 +1,7 @@
 
 SEED : s32 = 0;
 
-hash := s32.[208,34,231,213,32,248,233,56,161,78,24,140,71,48,140,254,245,255,247,247,40,
+HASH := u8.[208,34,231,213,32,248,233,56,161,78,24,140,71,48,140,254,245,255,247,247,40,
                      185,248,251,245,28,124,204,204,76,36,1,107,28,234,163,202,224,245,128,167,204,
                      9,92,217,54,239,174,173,102,193,189,190,121,100,108,167,44,43,77,180,204,8,81,
                      70,223,11,38,24,254,210,210,177,32,81,195,243,125,8,169,112,32,97,53,195,13,
@@ -15,42 +15,49 @@ hash := s32.[208,34,231,213,32,248,233,56,161,78,24,140,71,48,140,254,245,255,24
                      114,20,218,113,154,27,127,246,250,1,8,198,250,209,92,222,173,21,88,102,219];
 
 noise2 :: (x: s32, y: s32) -> s32 {
-    tmp : s32 = hash[(y + SEED) % 256];
-    return hash[(tmp + x) % 256];
+    yindex := (y + SEED) % 256;
+    if (yindex < 0)
+        yindex += 256;
+    xindex := (HASH[yindex] + x) % 256;
+    if (xindex < 0)
+        xindex += 256;
+    result := HASH[xindex];
+    return result;
 }
 
-lin_inter :: (x: float32, y: float32, s: float32) -> float32
+lin_inter :: (x: float64, y: float64, s: float64) -> float64
 {
     return x + s * (y-x);
 }
 
-smooth_inter :: (x: float32, y: float32, s: float32) -> float32
+smooth_inter :: (x: float64, y: float64, s: float64) -> float64
 {
     return lin_inter(x, y, s * s * (3-2*s));
 }
 
-noise2d :: (x: float32, y: float32) -> float32
+noise2d :: (x: float64, y: float64) -> float64
 {
-    x_int := cast(s32)x;
-    y_int := cast(s32)y;
-    x_frac := x - x_int;
-    y_frac := y - y_int;
-    s : s32 = noise2(x_int, y_int);
-    t : s32 = noise2(x_int+1, y_int);
-    u : s32 = noise2(x_int, y_int+1);
-    v : s32 = noise2(x_int+1, y_int+1);
-    low := smooth_inter(xx s, xx t, x_frac);
-    high := smooth_inter(xx u, xx v, x_frac);
-    return smooth_inter(low, high, y_frac);
+    x_int := cast(int)floor( x );
+    y_int := cast(int)floor( y );
+    x_frac : float64 = x - x_int;
+    y_frac : float64 = y - y_int;
+    s := noise2( xx x_int, xx y_int );
+    t := noise2( xx (x_int+1), xx y_int );
+    u := noise2( xx x_int, xx (y_int+1) );
+    v := noise2( xx (x_int+1), xx (y_int+1) );
+    low := smooth_inter( xx s, xx t, xx x_frac );
+    high := smooth_inter( xx u, xx v, xx x_frac );
+    result := smooth_inter( xx low, xx high, xx y_frac );
+    return result;
 }
 
-perlin2d :: (x: float32, y: float32, freq: float32, depth: s32) -> float32
+perlin2d :: (x: float64, y: float64, freq: float64, depth: s32) -> float64
 {
-    xa := x*freq;
-    ya := y*freq;
-    amp := 1.0;
-    fin := 0.0;
-    div := 0.0;
+    xa : float64 = x*freq;
+    ya : float64 = y*freq;
+    amp : float64 = 1.0;
+    fin : float64 = 0.0;
+    div : float64 = 0.0;
 
     for 0..depth-1 {
         div += 256 * amp;
