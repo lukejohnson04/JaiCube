@@ -1,4 +1,7 @@
 
+// This code was all stolen and converted into Jai!
+
+
 SEED : s32 = 0;
 
 HASH := u8.[208,34,231,213,32,248,233,56,161,78,24,140,71,48,140,254,245,255,247,247,40,

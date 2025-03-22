@@ -28,6 +28,7 @@ operator == :: (a: v2($T), b: v2(T)) -> bool {
     return a.x == b.x && a.y == b.y;
 }
 
+
 Rect :: struct {
     x: float32;
     y: float32;
