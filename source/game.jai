@@ -112,14 +112,14 @@ set_block :: (chunk: *Chunk, x: int, y: int, z: int, block: BLOCK_TYPE) {
 WORLD_SIZE :: 16;
 
 CHUNK_SIZE :: 16;
-CHUNK_HEIGHT :: 64;
+CHUNK_HEIGHT :: 128;
 
 // If a chunk is within the render distance amount of chunks, it will be loaded
 // If a chunk leaves the render distance+1 amount of chunks, it will be unloaded
 // chunks : [WORLD_SIZE][WORLD_SIZE]Chunk;
 loaded_chunks : [..]Chunk;
 
-RENDER_DISTANCE :: 16;
+RENDER_DISTANCE :: 12;
 
 
 generate_chunk :: (chunk: *Chunk) {

@@ -2,6 +2,14 @@
 window : *SDL_Window;
 
 main :: () {
+    #if OS == .WINDOWS {
+        Windows :: #import "Windows";
+        Windows.SetProcessDPIAware();
+
+        // Windows is very bad at thread-switching by default unless you do this. Sad.
+        Windows.timeBeginPeriod(1);
+    }
+
     if SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0 {
         print("Failed to initialize SDL!\n");
         return;
